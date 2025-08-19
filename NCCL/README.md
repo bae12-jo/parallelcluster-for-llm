@@ -5,7 +5,7 @@ This directory contains NCCL test scripts optimized for p5en.48xlarge instances 
 ## Prerequisites
 
 - AWS ParallelCluster with p5en.48xlarge compute nodes
-- NCCL 2.27.7+ installed
+- NCCL 2.27.6+ installed
 - AWS OFI NCCL plugin for EFA support
 - CUDA 12.0+ toolkit
 
@@ -51,7 +51,7 @@ This directory contains NCCL test scripts optimized for p5en.48xlarge instances 
 
 ## Expected Performance (p5en.48xlarge)
 
-- **Single Node (8x H200)**: ~1.8 TB/s aggregate bandwidth
+- **Single Node (8x H200)**: ~1.2-1.4 TB/s aggregate bandwidth (70-80% of theoretical)
 - **Multi-Node**: Linear scaling with 3.2Tbps networking
 - **Latency**: <10μs for small messages within node
 - **NVLink**: ~900 GB/s per GPU pair
@@ -65,9 +65,12 @@ This directory contains NCCL test scripts optimized for p5en.48xlarge instances 
 # Enable NVLink Sharp for H200 GPUs
 export NCCL_NVLS_ENABLE=1
 
-# Optimize for 3.2Tbps network bandwidth
+# EFA-optimized protocol (critical for p5en)
 export NCCL_PROTO=Simple
 export NCCL_ALGO=Ring,Tree
+
+# GPU Direct optimization (important for p5en)
+export NCCL_NET_GDR_LEVEL=PIX
 
 # Disable conflicting transports
 export NCCL_IB_DISABLE=1
@@ -76,7 +79,6 @@ export NCCL_SHM_DISABLE=0
 
 # Network interface configuration
 export NCCL_SOCKET_IFNAME=^docker0,lo
-export NCCL_NET_GDR_LEVEL=PIX
 export NCCL_CROSS_NIC=0
 ```
 
@@ -84,6 +86,8 @@ export NCCL_CROSS_NIC=0
 ```bash
 # Enable EFA provider for 3.2Tbps bandwidth
 export FI_PROVIDER=efa
+
+# Critical for p5en performance
 export FI_EFA_USE_DEVICE_RDMA=1
 export FI_EFA_FORK_SAFE=1
 
@@ -93,6 +97,7 @@ export FI_EFA_USE_HUGE_PAGE=1
 
 # Multi-rail configuration for maximum bandwidth
 export FI_EFA_NUM_MR_CACHE_ENTRIES=65536
+export FI_EFA_MR_CACHE_ENABLE=1
 ```
 
 #### GPU and Memory Optimization
@@ -165,29 +170,35 @@ export NCCL_DEBUG_NOCHECK=0
 ### Version Compatibility
 
 #### Recommended Versions
-- **NCCL**: v2.27.7-1 or later
-- **AWS OFI NCCL**: v1.16.2-aws or later
+- **NCCL**: v2.27.6-1 (stable, tested)
+- **AWS OFI NCCL**: v1.16.2-aws (latest stable)
+- **Libfabric**: v1.22.0amzn4.0 or later (required for AWS OFI NCCL)
 - **CUDA**: 12.0+ for H200 support
 - **EFA Driver**: Latest from AWS
 
 #### Installation Commands
 ```bash
-# Install latest NCCL
-wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/libnccl2_2.27.7-1+cuda12.0_amd64.deb
-dpkg -i libnccl2_2.27.7-1+cuda12.0_amd64.deb
+# Install stable NCCL version
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/libnccl2_2.27.6-1+cuda12.0_amd64.deb
+dpkg -i libnccl2_2.27.6-1+cuda12.0_amd64.deb
 
-# Install AWS OFI NCCL plugin
+# Install AWS OFI NCCL plugin (requires Libfabric v1.22.0amzn4.0+)
 git clone https://github.com/aws/aws-ofi-nccl.git -b v1.16.2-aws
 cd aws-ofi-nccl && ./autogen.sh && ./configure && make && make install
+
+# Verify Libfabric version
+fi_info --version  # Should show v1.22.0amzn4.0 or later
 ```
 
 ### Performance Expectations
 
 #### Single Node (8x H200)
-- **AllReduce (1GB)**: ~1.8 TB/s aggregate
-- **AllGather (1GB)**: ~1.6 TB/s aggregate  
-- **P2P NVLink**: ~900 GB/s per direction
-- **Memory Copy**: ~4.8 TB/s per GPU
+- **AllReduce (1GB)**: ~1.2-1.4 TB/s aggregate (70-80% of theoretical)
+- **AllGather (1GB)**: ~1.0-1.2 TB/s aggregate (70-80% of theoretical)  
+- **P2P NVLink**: ~900 GB/s per direction (hardware limit)
+- **Memory Copy**: ~4.8 TB/s per GPU (HBM3e bandwidth)
+
+> **Note**: Real-world NCCL performance typically achieves 70-80% of theoretical maximum due to protocol overhead, synchronization, and network stack latency.
 
 #### Multi-Node (2+ nodes)
 - **Inter-node bandwidth**: 3.2 Tbps per node

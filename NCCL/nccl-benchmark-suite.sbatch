@@ -146,7 +146,7 @@ grep -E "(1048576|8388608|134217728|1073741824)" $RESULT_DIR/sendrecv.log | \
 echo "" >> $REPORT_FILE
 echo "=== Expected Performance Baselines ===" >> $REPORT_FILE
 echo "Single Node (8x H200):" >> $REPORT_FILE
-echo "  - Peak aggregate bandwidth: ~1.8 TB/s" >> $REPORT_FILE
+echo "  - Peak aggregate bandwidth: ~1.2-1.4 TB/s (realistic)" >> $REPORT_FILE
 echo "  - NVLink bandwidth per GPU: ~900 GB/s" >> $REPORT_FILE
 echo "  - Memory bandwidth per GPU: ~4.8 TB/s" >> $REPORT_FILE
 echo "  - Latency (small messages): <10μs" >> $REPORT_FILE

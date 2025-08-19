@@ -61,7 +61,7 @@ export SLURMD_TIMEOUT="600"
 export UNKILLABLE_STEP_TIMEOUT="120"
 
 # NCCL 버전 (keep it up-to-date)
-export NCCL_VERSION="v2.27.7-1"
+export NCCL_VERSION="v2.27.6-1"
 export AWS_OFI_NCCL_VERSION="v1.16.2-aws"
 
 # 모니터링 설정
