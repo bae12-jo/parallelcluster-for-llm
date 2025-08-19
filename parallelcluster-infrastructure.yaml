@@ -250,6 +250,102 @@ Resources:
       IpProtocol: -1
       GroupId: !Ref ComputeNodeSecurityGroup
       SourceSecurityGroupId: !Ref ComputeNodeSecurityGroup
+  
+  # FSx Lustre NFS 포트 (111, 2049, 20001-20003) - ComputeNode 간 통신
+  FSxNFSPortmapperIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: FSx NFS Portmapper (111) - ComputeNode to ComputeNode
+      IpProtocol: udp
+      FromPort: 111
+      ToPort: 111
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref ComputeNodeSecurityGroup
+  
+  FSxNFSIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: FSx NFS (2049) - ComputeNode to ComputeNode
+      IpProtocol: udp
+      FromPort: 2049
+      ToPort: 2049
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref ComputeNodeSecurityGroup
+  
+  FSxLustreIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: FSx Lustre (20001-20003) - ComputeNode to ComputeNode
+      IpProtocol: udp
+      FromPort: 20001
+      ToPort: 20003
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref ComputeNodeSecurityGroup
+  
+  # FSx OpenZFS NFS 포트 - HeadNode에서 ComputeNode로의 접근
+  FSxNFSPortmapperFromHeadIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: FSx NFS Portmapper (111) - HeadNode to ComputeNode
+      IpProtocol: udp
+      FromPort: 111
+      ToPort: 111
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref HeadNodeSecurityGroup
+  
+  FSxNFSFromHeadIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: FSx NFS (2049) - HeadNode to ComputeNode
+      IpProtocol: udp
+      FromPort: 2049
+      ToPort: 2049
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref HeadNodeSecurityGroup
+  
+  # OpenZFS NFS TCP 포트들 (NFS over TCP 지원) - ComputeNode 간 통신
+  FSxNFSPortmapperTCPIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: FSx NFS Portmapper TCP (111) - ComputeNode to ComputeNode
+      IpProtocol: tcp
+      FromPort: 111
+      ToPort: 111
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref ComputeNodeSecurityGroup
+  
+  FSxNFSTCPIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: FSx NFS TCP (2049) - ComputeNode to ComputeNode
+      IpProtocol: tcp
+      FromPort: 2049
+      ToPort: 2049
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref ComputeNodeSecurityGroup
+  
+  # OpenZFS NFS TCP 포트들 - HeadNode에서 ComputeNode로의 접근
+  FSxNFSPortmapperTCPFromHeadIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: FSx NFS Portmapper TCP (111) - HeadNode to ComputeNode
+      IpProtocol: tcp
+      FromPort: 111
+      ToPort: 111
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref HeadNodeSecurityGroup
+  
+  FSxNFSTCPFromHeadIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: FSx NFS TCP (2049) - HeadNode to ComputeNode
+      IpProtocol: tcp
+      FromPort: 2049
+      ToPort: 2049
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref HeadNodeSecurityGroup
+  
+
   # HeadNode에서 ComputeNode로의 통신
   HeadNodeToComputeIngress:
     Type: AWS::EC2::SecurityGroupIngress
