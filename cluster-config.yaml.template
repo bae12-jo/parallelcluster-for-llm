@@ -36,8 +36,6 @@ LoginNodes:
     - Name: ${LOGIN_NODE_POOL_NAME}
       Count: ${LOGIN_NODE_COUNT}
       InstanceType: ${LOGIN_NODE_INSTANCE_TYPE}
-      Image:
-        Os: ${LOGIN_NODE_OS_TYPE}
       Networking:
         SubnetIds:
           - ${LOGIN_NODE_SUBNET_ID}
@@ -50,12 +48,6 @@ LoginNodes:
           - Policy: arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
           - Policy: arn:aws:iam::aws:policy/CloudWatchReadOnlyAccess
           - Policy: arn:aws:iam::aws:policy/AWSPriceListServiceFullAccess   
-      LocalStorage:
-        RootVolume:
-          Size: ${LOGIN_NODE_ROOT_VOLUME_SIZE}
-          DeleteOnTermination: true
-        EphemeralVolume:
-          MountDir: ${LOGIN_NODE_SCRATCH_DIR}
       Ssh:
         KeyName: ${LOGIN_NODE_KEY_PAIR}
       CustomActions:

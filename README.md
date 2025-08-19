@@ -1,4 +1,4 @@
-# AWS ParallelCluster for LLM training (using p5en.48xlarge)
+# AWS ParallelCluster for p5en.48xlarge with Monitoring & NCCL Tests
 
 ![Architecture Diagram](img/architecture.png)
 
@@ -85,7 +85,73 @@ A comprehensive solution for deploying AWS ParallelCluster optimized for p5en.48
     └── architecture.png              # Architecture diagram
 ```
 
+## �  Prerequisites
+
+Before starting, ensure you have the following tools installed:
+
+```bash
+# AWS CLI v2 (if not using CloudShell)
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip && sudo ./aws/install
+
+# AWS ParallelCluster CLI v3.13.2 (latest)
+# Method 1: Using pip (recommended)
+pip3 install --upgrade aws-parallelcluster==3.13.2
+
+# Method 2: Using virtual environment (isolated)
+python3 -m venv pcluster-env
+source pcluster-env/bin/activate
+pip install aws-parallelcluster==3.13.2
+
+# Verify installation
+pcluster version
+
+# Required utilities
+sudo apt-get update && sudo apt-get install -y \
+    gettext-base \  # for envsubst
+    jq \           # for JSON processing
+    git \          # for cloning repositories
+    wget           # for downloading files
+
+# Configure AWS credentials (skip if using CloudShell)
+aws configure
+
+# For AWS CloudShell users (credentials already configured):
+# Just verify your identity
+aws sts get-caller-identity
+```
+
 ## 🚀 Quick Start
+
+### Option A: AWS CloudShell (Recommended)
+
+AWS CloudShell provides a pre-configured environment with most tools already installed:
+
+```bash
+# 1. Open AWS CloudShell from AWS Console
+# 2. Clone this repository
+git clone https://github.com/bae12-jo/parallelcluster.git
+cd parallelcluster
+
+# 3. Install ParallelCluster CLI (latest version)
+pip3 install --user aws-parallelcluster==3.13.2
+export PATH=$PATH:~/.local/bin
+
+# 4. Verify installation
+pcluster version
+aws sts get-caller-identity
+
+# 5. Continue with infrastructure deployment below
+
+# Note: CloudShell sessions timeout after 20 minutes of inactivity
+# Your files in $HOME persist between sessions
+```
+
+### Option B: Local Environment Setup
+
+If you prefer to run from your local machine or EC2 instance, follow the Prerequisites section above.
+
+## 📋 Deployment Steps
 
 ### 1. Deploy Infrastructure
 
@@ -101,17 +167,37 @@ aws cloudformation create-stack \
 ### 2. Configure Environment Variables
 
 ```bash
+# Install envsubst if not available
+# Check if already installed (usually available in CloudShell)
+which envsubst || echo "envsubst not found, installing..."
+
+# Ubuntu/Debian:
+sudo apt-get update && sudo apt-get install -y gettext-base
+
+# Amazon Linux/RHEL/CentOS (including CloudShell):
+# sudo yum install -y gettext
+
 # Edit environment-variables.sh with your specific values
 vim environment-variables.sh
-
-# Set STACK_NAME to your CloudFormation stack name
-# Set KEY_PAIR_NAME to your EC2 key pair name
+# Required changes:
+# - Set STACK_NAME to your CloudFormation stack name
+# - Set KEY_PAIR_NAME to your EC2 key pair name
 
 # Load environment variables
 source environment-variables.sh
 
+# Verify critical variables are set
+echo "Stack: $STACK_NAME"
+echo "Key Pair: $KEY_PAIR_NAME"
+
 # Generate cluster configuration from template
 envsubst < cluster-config.yaml.template > cluster-config.yaml
+
+# Verify the generated configuration
+head -20 cluster-config.yaml
+
+# Validate configuration (recommended)
+pcluster validate-cluster-configuration --cluster-configuration cluster-config.yaml
 ```
 
 ### 3. Create ParallelCluster
@@ -184,7 +270,7 @@ sbatch /fsx/nccl-tests/nccl-multi-node-test.sbatch
 ## 📊 Expected Performance
 
 ### Single Node (8x H200)
-- **Peak Aggregate Bandwidth**: ~1.8 TB/s
+- **Peak Aggregate Bandwidth**: ~1.2-1.4 TB/s (realistic NCCL performance)
 - **NVLink Bandwidth**: ~900 GB/s per GPU pair
 - **Memory Bandwidth**: ~4.8 TB/s per GPU
 - **Latency**: <10μs for small messages
@@ -232,13 +318,66 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7  # All 8x H200 GPUs
 
 ### Common Issues
 
-1. **GPU Not Detected**
+1. **envsubst Command Not Found**
+   ```bash
+   # Ubuntu/Debian
+   sudo apt-get update && sudo apt-get install -y gettext-base
+   
+   # Amazon Linux/RHEL/CentOS
+   sudo yum install -y gettext
+   
+   # Verify installation
+   which envsubst && envsubst --version
+   ```
+
+2. **Environment Variables Not Substituted**
+   ```bash
+   # Check if variables are exported
+   echo $PRIVATE_SUBNET_ID
+   
+   # Re-source the environment file
+   source environment-variables.sh
+   
+   # Verify template substitution
+   envsubst < cluster-config.yaml.template | head -20
+   ```
+
+3. **ParallelCluster CLI Issues**
+   ```bash
+   # Check if pcluster is in PATH
+   which pcluster
+   
+   # If not found, add to PATH (CloudShell)
+   export PATH=$PATH:~/.local/bin
+   echo 'export PATH=$PATH:~/.local/bin' >> ~/.bashrc
+   
+   # Verify version
+   pcluster version
+   
+   # Update to latest version
+   pip3 install --upgrade aws-parallelcluster==3.13.2
+   ```
+
+4. **Configuration Validation Errors**
+   ```bash
+   # Validate configuration before creating cluster
+   pcluster validate-cluster-configuration --cluster-configuration cluster-config.yaml
+   
+   # Check for schema compatibility with your ParallelCluster version
+   pcluster version
+   
+   # If using older templates, regenerate from template
+   source environment-variables.sh
+   envsubst < cluster-config.yaml.template > cluster-config.yaml
+   ```
+
+5. **GPU Not Detected**
    ```bash
    nvidia-smi  # Check GPU visibility
    lspci | grep NVIDIA  # Verify PCIe detection
    ```
 
-2. **Network Issues (3.2Tbps)**
+6. **Network Issues (3.2Tbps)**
    ```bash
    fi_info -p efa  # Check EFA provider
    ibv_devinfo     # Verify network devices
