@@ -1,0 +1,521 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWS ParallelCluster infrastructure for large language model development.
+  Creates GPU-optimized environment with EFA-enabled compute nodes, FSx Lustre
+  high-throughput storage, and security groups optimized for 500B MoE training
+  with DeepEP framework. Supports distributed training across multiple nodes.
+
+
+####################
+## Stack Metadata ##
+####################
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: General configuration
+        Parameters:
+          - VPCName
+      - Label:
+          default: Availability Zone configuration for the subnets
+        Parameters:
+          - PrimarySubnetAZ
+      - Label:
+          default: Fsx Lustre storage size
+        Parameters:
+          - Capacity
+      - Label:
+          default: Network and S3 endpoints configuration
+        Parameters:
+          - CreateS3Endpoint
+    ParameterLabels:
+      VPCName:
+        default: Name of your VPC
+      PrimarySubnetAZ:
+        default: Availability zone id to deploy the primary subnets
+      CreateS3Endpoint:
+        default: Create an S3 endpoint
+
+######################
+## Stack Parameters ##
+######################
+
+Parameters:
+  VPCName:
+    Description: Name of your VPC
+    Default: 'AWS ParallelCluster'
+    Type: String
+
+  PrimarySubnetAZ:
+    Description: Availability zone id in which the public subnet and primary private subnet will be created.
+    Type: AWS::EC2::AvailabilityZone::Name
+
+  CreateS3Endpoint:
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+    Description:
+      Set to false if to avoid creating an S3 endpoint on your VPC.
+    Type: String
+
+  Capacity:
+    Description: Storage capacity in GiB (1200 or increments of 2400)
+    Type: Number
+    Default: 1200
+  
+  PerUnitStorageThroughput:
+    Description: Provisioned Read/Write (MB/s/TiB) - PERSISTENT_1 supports max 200
+    Type: Number
+    Default: 200
+    AllowedValues:
+      - 100
+      - 200
+  
+  Compression:
+    Description: Data compression type
+    Type: String
+    AllowedValues:
+      - "LZ4"
+      - "NONE"
+    Default: "LZ4"
+  
+  LustreVersion:
+    Description: Lustre software version
+    Type: String
+    AllowedValues:
+      - "2.15"
+      - "2.12"
+    Default: "2.15"
+
+  HomeCapacity:
+    Description: "Home directories storage capacity in GiB"
+    Type: Number
+    Default: 512  #fixed throughput for Single AZ
+
+  OpenZFSDeploymentType:
+      Description: OpenZFS deployment type
+      Type: String
+      AllowedValues:
+        - "SINGLE_AZ_1"
+        - "SINGLE_AZ_2" 
+        - "SINGLE_AZ_HA_1"
+        - "SINGLE_AZ_HA_2"
+        - "MULTI_AZ_1"
+      Default: "SINGLE_AZ_2" # Single AZ is a good option for bigger storage. AZ_2 provides better performance than AZ_1
+
+  HomeThroughput:
+    Description: "Home directories storage throughput MB/s"
+    Type: Number
+    Default: 640
+    AllowedValues:
+      - 160
+      - 320
+      - 640
+      - 1280
+      - 2560
+      - 3840
+      - 5120
+      - 7680
+      - 10240
+
+
+###############################
+## Conditions for Parameters ##
+###############################
+
+Conditions:
+  S3EndpointCondition: !Equals [!Ref 'CreateS3Endpoint', 'true']
+
+#########################
+## VPC & Network Setup ##
+#########################
+
+Mappings:
+  Networking:
+    VPC:
+      CIDR0: 10.0.0.0/16
+      CIDR1: 10.1.0.0/16
+
+Resources:
+  # Create a VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !FindInMap [Networking, VPC, CIDR0]
+      Tags:
+        - Key: Name
+          Value: AWS ParallelCluster VPC
+
+  VpcCidrBlock:
+    Type: AWS::EC2::VPCCidrBlock
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [Networking, VPC, CIDR1]
+
+
+  # Create an IGW and add it to the VPC
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayToInternet:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Create a NAT GW then add it to the public subnet
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt ElasticIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  # Head Node Security Group
+  HeadNodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: headnode-sg
+      GroupDescription: Security Group for ParallelCluster HeadNode
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        # LoginNode에서 SSH만 접근 허용
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref LoginNodeSecurityGroup
+          Description: Only SSH access from LoginNode
+        # Slurm 통신 포트들
+        - IpProtocol: tcp
+          FromPort: 6817
+          ToPort: 6818
+          SourceSecurityGroupId: !Ref LoginNodeSecurityGroup
+          Description: Slurm communication from compute nodes
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: HeadNode Security Group
+
+  # Compute Node Security Group (including EFA)
+  ComputeNodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: compute-node-sg
+      GroupDescription: Security Group for ParallelCluster Compute Nodes with EFA
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: ComputeNode Security Group
+      EFASecurityGroupEgress:
+        # AWS APIs
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        # Package downloads
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        # DNS
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          CidrIp: 0.0.0.0/0
+        # VPC 내부 통신
+        - IpProtocol: -1
+          CidrIp: !FindInMap [Networking, VPC, CIDR0]
+        - IpProtocol: -1
+          CidrIp: !FindInMap [Networking, VPC, CIDR1]
+  # ComputeNode 간 EFA 통신
+  EFASecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: EFA communication between compute nodes
+      IpProtocol: -1
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref ComputeNodeSecurityGroup
+  # HeadNode에서 ComputeNode로의 통신
+  HeadNodeToComputeIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Communication from HeadNode to Compute nodes
+      IpProtocol: tcp
+      FromPort: 1
+      ToPort: 65535
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref HeadNodeSecurityGroup
+  # DeepEP 전용 통신 포트
+  DeepEPCommunicationIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: DeepEP expert routing and communication
+      IpProtocol: tcp
+      FromPort: 25000
+      ToPort: 25100
+      GroupId: !Ref ComputeNodeSecurityGroup
+      SourceSecurityGroupId: !Ref ComputeNodeSecurityGroup
+
+  # Login Node Security Group (including Grafana)
+  LoginNodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: login-node-sg
+      GroupDescription: Security Group for ParallelCluster LoginNodes
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        # SSH access from Internet
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access from internet
+        # Grafana/Monitoring
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS access to Grafana
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP access to Grafana
+        # Jupyter Lab for DeepEP development
+        - IpProtocol: tcp
+          FromPort: 8888
+          ToPort: 8892
+          CidrIp: 0.0.0.0/0
+          Description: Jupyter Lab for MoE model development
+        # TensorBoard for training monitoring
+        - IpProtocol: tcp
+          FromPort: 6006
+          ToPort: 6010
+          CidrIp: 0.0.0.0/0
+          Description: TensorBoard for 500B model training monitoring
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: 0.0.0.0/0
+          Description: Grafana dashboard access
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: LoginNode Security Group
+
+
+  # Build the public subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: VPC
+    Properties:
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+      CidrBlock: !Select [ 0, !Cidr [ !GetAtt VPC.CidrBlock, 2, 15 ]]
+      AvailabilityZone: !Ref PrimarySubnetAZ
+      Tags:
+        - Key: Name
+          Value: !Join [ ' ', [ !Ref VPCName, 'Public Subnet -', !Ref PrimarySubnetAZ ] ]
+
+  # Create the primary private subnet
+  PrimaryPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: [VpcCidrBlock]
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [ 0, !Cidr [ !FindInMap [Networking, VPC, CIDR1], 2, 15 ]]
+      AvailabilityZone: !Ref PrimarySubnetAZ
+      Tags:
+        - Key: Name
+          Value: !Join [ ' ', [ !Ref VPCName, 'Private Subnet -', !Ref PrimarySubnetAZ ] ]
+
+  # Create and set the public route table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Then the private route table
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRouteToInternet:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  # Associate the public route table to the public subnet
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # and the primary private subnet to the private route table
+  PrimaryPrivateSubnetRTAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrimaryPrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  # S3 endpoint
+  S3Endpoint:
+    Condition: S3EndpointCondition
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+            - Effect: Allow
+              Principal: '*'
+              Action:
+                - '*'
+              Resource:
+                - '*'
+      RouteTableIds:
+        - !Ref PublicRouteTable
+        - !Ref PrivateRouteTable
+      ServiceName: !Join
+        - ''
+        - - com.amazonaws.
+          - !Ref AWS::Region
+          - .s3
+      VpcId: !Ref VPC
+
+  FSxLFilesystem:
+    Type: AWS::FSx::FileSystem
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      FileSystemType: LUSTRE
+      StorageType: SSD
+      FileSystemTypeVersion: !Ref LustreVersion
+      StorageCapacity: !Ref Capacity
+      SecurityGroupIds:
+        - !Ref ComputeNodeSecurityGroup
+      SubnetIds:
+        - !Ref PrimaryPrivateSubnet
+      LustreConfiguration:
+        DataCompressionType: !Ref Compression
+        DeploymentType: PERSISTENT_1
+        PerUnitStorageThroughput: !Ref PerUnitStorageThroughput
+
+
+  OpenZFSFileSystem:
+    Type: AWS::FSx::FileSystem
+    Properties:
+      FileSystemType: OPENZFS
+      OpenZFSConfiguration: 
+        AutomaticBackupRetentionDays: 30
+        CopyTagsToBackups: Yes
+        CopyTagsToVolumes: Yes
+        DailyAutomaticBackupStartTime: '19:00'
+        DeploymentType: !Ref OpenZFSDeploymentType #Single AZ, Better Performance
+        Options: 
+          - DELETE_CHILD_VOLUMES_AND_SNAPSHOTS
+        RootVolumeConfiguration: 
+          DataCompressionType: NONE
+          NfsExports: 
+            - ClientConfigurations: 
+              -  Clients: '*'
+                 Options: 
+                    - rw
+                    - no_root_squash
+                    - crossmnt
+        ThroughputCapacity: !Ref HomeThroughput
+        WeeklyMaintenanceStartTime: '1:04:00'
+      SecurityGroupIds: 
+        - !Ref ComputeNodeSecurityGroup
+      StorageCapacity: !Ref HomeCapacity
+      StorageType: SSD
+      SubnetIds: 
+        - !Ref PrimaryPrivateSubnet
+
+#############
+## Outputs ##
+#############
+Outputs:
+  AWSRegion:
+    Value: !Ref AWS::Region
+    Description: AWS Region where the stack is deployed
+    Export:
+      Name: !Sub ${AWS::StackName}-AWSRegion
+  VPC:
+    Value: !Ref VPC
+    Description: ID of the VPC
+    Export:
+      Name: !Sub ${AWS::StackName}-VPC
+  PublicSubnet:
+    Value: !Ref PublicSubnet
+    Description: ID of the public subnet
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnet
+  PrimaryPrivateSubnet:
+    Value: !Ref PrimaryPrivateSubnet
+    Description: ID of the primary private subnet
+    Export:
+      Name: !Sub ${AWS::StackName}-PrimaryPrivateSubnet
+  HeadNodeSecurityGroup:
+    Value: !Ref HeadNodeSecurityGroup
+    Description: Security Group ID for HeadNode
+    Export:
+      Name: !Sub ${AWS::StackName}-HeadNodeSecurityGroup
+  ComputeNodeSecurityGroup:
+    Value: !Ref ComputeNodeSecurityGroup
+    Description: Security Group ID for Compute Nodes with EFA
+    Export:
+      Name: !Sub ${AWS::StackName}-ComputeNodeSecurityGroup
+  LoginNodeSecurityGroup:
+    Value: !Ref LoginNodeSecurityGroup
+    Description: Security Group ID for LoginNodes
+    Export:
+      Name: !Sub ${AWS::StackName}-LoginNodeSecurityGroup
+  FSxLustreFilesystemMountname:
+    Description: The ID of the FSxL filesystem that has been created
+    Value: !GetAtt FSxLFilesystem.LustreMountName
+    Export:
+      Name: !Sub ${AWS::StackName}-FSxLustreFilesystemMountname
+  FSxLustreFilesystemDNSname:
+    Description: The DNS of the FSxL filesystem that has been created
+    Value: !GetAtt FSxLFilesystem.DNSName
+    Export:
+      Name: !Sub ${AWS::StackName}-FSxLustreFilesystemDNSname
+  FSxLustreFilesystemId:
+    Description: The ID of the FSxL filesystem that has been created
+    Value: !Ref FSxLFilesystem
+    Export:
+      Name: !Sub ${AWS::StackName}-FSxLustreFilesystemId
+  FSxORootVolumeId:
+    Description: The ID of Fsx OpenZFS root volume
+    Value: !GetAtt OpenZFSFileSystem.RootVolumeId
+    Export:
+      Name: !Sub ${AWS::StackName}-FSxORootVolumeId
