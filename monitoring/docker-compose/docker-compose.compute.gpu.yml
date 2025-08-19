@@ -1,0 +1,30 @@
+#
+#
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+#
+#
+version: '3.8'
+services:
+    prometheus-node-exporter:
+        container_name: node-exporter
+        network_mode: host
+        pid: host
+        restart: unless-stopped
+        volumes:
+            - '/:/host:ro,rslave'
+        image: quay.io/prometheus/node-exporter
+        command:
+            - '--path.rootfs=/host'
+    dcgm-exporter:
+        container_name: nvidia-dcgm
+        network_mode: host
+        pid: host
+        restart: unless-stopped
+        image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.5-3.4.0-ubuntu22.04
+        runtime: nvidia
+        environment:
+            - NVIDIA_VISIBLE_DEVICES=all
+            - NVIDIA_DRIVER_CAPABILITIES=all
+        cap_add:
+            - SYS_ADMIN
