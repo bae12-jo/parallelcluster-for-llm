@@ -98,20 +98,8 @@ unzip awscliv2.zip && sudo ./aws/install
 # Method 1: Using pip (recommended)
 pip3 install --upgrade aws-parallelcluster==3.13.2
 
-# Method 2: Using virtual environment (isolated)
-python3 -m venv pcluster-env
-source pcluster-env/bin/activate
-pip install aws-parallelcluster==3.13.2
-
 # Verify installation
 pcluster version
-
-# Required utilities
-sudo apt-get update && sudo apt-get install -y \
-    gettext-base \  # for envsubst
-    jq \           # for JSON processing
-    git \          # for cloning repositories
-    wget           # for downloading files
 
 # Configure AWS credentials (skip if using CloudShell)
 aws configure
@@ -122,36 +110,6 @@ aws sts get-caller-identity
 ```
 
 ## 🚀 Quick Start
-
-### Option A: AWS CloudShell (Recommended)
-
-AWS CloudShell provides a pre-configured environment with most tools already installed:
-
-```bash
-# 1. Open AWS CloudShell from AWS Console
-# 2. Clone this repository
-git clone https://github.com/bae12-jo/parallelcluster.git
-cd parallelcluster
-
-# 3. Install ParallelCluster CLI (latest version)
-pip3 install --user aws-parallelcluster==3.13.2
-export PATH=$PATH:~/.local/bin
-
-# 4. Verify installation
-pcluster version
-aws sts get-caller-identity
-
-# 5. Continue with infrastructure deployment below
-
-# Note: CloudShell sessions timeout after 20 minutes of inactivity
-# Your files in $HOME persist between sessions
-```
-
-### Option B: Local Environment Setup
-
-If you prefer to run from your local machine or EC2 instance, follow the Prerequisites section above.
-
-## 📋 Deployment Steps
 
 ### 1. Deploy Infrastructure
 
@@ -186,18 +144,8 @@ vim environment-variables.sh
 # Load environment variables
 source environment-variables.sh
 
-# Verify critical variables are set
-echo "Stack: $STACK_NAME"
-echo "Key Pair: $KEY_PAIR_NAME"
-
 # Generate cluster configuration from template
 envsubst < cluster-config.yaml.template > cluster-config.yaml
-
-# Verify the generated configuration
-head -20 cluster-config.yaml
-
-# Validate configuration (recommended)
-pcluster validate-cluster-configuration --cluster-configuration cluster-config.yaml
 ```
 
 ### 3. Create ParallelCluster
@@ -206,7 +154,7 @@ pcluster validate-cluster-configuration --cluster-configuration cluster-config.y
 # Create cluster with p5en.48xlarge compute nodes
 pcluster create-cluster \
   --cluster-name p5en-cluster \
-  --cluster-configuration file://cluster-config.yaml
+  --cluster-configuration cluster-config.yaml
 ```
 
 ### 4. Install Monitoring
