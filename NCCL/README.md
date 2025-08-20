@@ -67,7 +67,7 @@ export NCCL_NVLS_ENABLE=1
 
 # EFA-optimized protocol (critical for p5en)
 export NCCL_PROTO=Simple
-export NCCL_ALGO=Ring,Tree,Hierarchical
+export NCCL_ALGO=Ring,Tree
 
 # GPU Direct optimization (important for p5en)
 export NCCL_NET_GDR_LEVEL=PIX
